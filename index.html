@@ -30,7 +30,7 @@
     <h1>🚀 Генератор ссылки VPN</h1>
     
     <div class="card">
-        <p>Скрипт переберёт несколько прокси и CDN-зеркал, пока один из них не сработает.</p>
+        <p>Скрипт переберет зеркала и прокси для скачивания, улучшенный парсер локаций и перебор сервисов для создания ссылки.</p>
         <div class="btn-group">
             <button class="btn" id="startBtn" onclick="generate()">СГЕНЕРИРОВАТЬ ССЫЛКУ</button>
             <button class="btn btn-secondary" onclick="toggleLogs()">📝 Показать логи</button>
@@ -50,17 +50,14 @@
     </div>
 
     <script>
-        // Исходные данные
         const RAW_GITHUB_URL = 'https://raw.githubusercontent.com/Remiuc0ff/vpn-hiddifycode/main/allhiddifyvpn';
         
-        // Список прокси в порядке приоритета (от более стабильных к менее)
-        const PROXIES = [
+        // 1. Зеркала и прокси для скачивания файла
+        const DOWNLOAD_PROXIES = [
+            { name: 'jsDelivr CDN', build: () => `https://cdn.jsdelivr.net/gh/Remiuc0ff/vpn-hiddifycode@main/allhiddifyvpn` },
+            { name: 'Statically CDN', build: () => `https://cdn.statically.io/gh/Remiuc0ff/vpn-hiddifycode/main/allhiddifyvpn` },
             { name: 'corsproxy.io', build: (url) => `https://corsproxy.io/?${encodeURIComponent(url)}` },
-            { name: 'api.cors.lol', build: (url) => `https://api.cors.lol/?url=${encodeURIComponent(url)}` },
-            { name: 'cors.sh', build: (url) => `https://proxy.cors.sh/${url}` }, // Может требовать API-ключ
-            { name: 'allorigins.win', build: (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}` },
-            { name: 'jsDelivr CDN', build: (url) => `https://cdn.jsdelivr.net/gh/Remiuc0ff/vpn-hiddifycode@main/allhiddifyvpn` },
-            { name: 'Statically CDN', build: (url) => `https://cdn.statically.io/gh/Remiuc0ff/vpn-hiddifycode/main/allhiddifyvpn` }
+            { name: 'allorigins.win', build: (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}` }
         ];
 
         let logVisible = false;
@@ -85,25 +82,16 @@
             if (btn) btn.innerText = logVisible ? '📝 Скрыть логи' : '📝 Показать логи';
         }
 
-        // Попытка скачать конфиги через перебор прокси
+        // --- ШАГ 1: Скачивание ---
         async function fetchWithFallback() {
-            for (const proxy of PROXIES) {
+            for (const proxy of DOWNLOAD_PROXIES) {
                 try {
                     const targetUrl = proxy.build(RAW_GITHUB_URL);
-                    log(`Попытка через ${proxy.name}: ${targetUrl.substring(0, 70)}...`, 'info');
-                    
-                    const res = await fetch(targetUrl, { signal: AbortSignal.timeout(8000) }); // 8 сек таймаут
-                    if (!res.ok) {
-                        log(`  ❌ ${proxy.name} вернул HTTP ${res.status}`, 'error');
-                        continue;
-                    }
-                    
+                    log(`Попытка через ${proxy.name}...`, 'info');
+                    const res = await fetch(targetUrl, { signal: AbortSignal.timeout(8000) });
+                    if (!res.ok) { log(`  ❌ ${proxy.name} вернул HTTP ${res.status}`, 'error'); continue; }
                     const text = await res.text();
-                    if (!text || text.length < 50) {
-                        log(`  ❌ ${proxy.name} вернул пустой/короткий ответ`, 'error');
-                        continue;
-                    }
-                    
+                    if (!text || text.length < 50) { log(`  ❌ ${proxy.name} пустой ответ`, 'error'); continue; }
                     log(`  ✅ Успешно через ${proxy.name}! (${text.length} байт)`, 'success');
                     return text;
                 } catch (e) {
@@ -113,6 +101,86 @@
             throw new Error('Все прокси и зеркала не сработали.');
         }
 
+        // --- УЛУЧШЕННЫЙ ПАРСЕР ЛОКАЦИЙ ---
+        function parseServers(text) {
+            const lines = text.split('\n').filter(l => l.trim() !== '');
+            const servers = [];
+            for (const line of lines) {
+                if (line.startsWith('vless://') || line.startsWith('trojan://')) {
+                    try {
+                        // Отделяем хэш (название) от самой ссылки
+                        let uri = line;
+                        let name = '';
+                        const hashIndex = line.indexOf('#');
+                        if (hashIndex !== -1) {
+                            name = decodeURIComponent(line.substring(hashIndex + 1));
+                            uri = line.substring(0, hashIndex);
+                        }
+
+                        // Ищем хост и порт
+                        const match = uri.match(/@([^:]+):(\d+)/);
+                        if (match) {
+                            const host = match[1];
+                            // Если названия нет или оно пустое, используем IP-адрес как локацию
+                            let locName = name.replace(/\s*\d+$/, '').trim();
+                            if (!locName) locName = host; 
+
+                            servers.push({ uri: line, host, location: locName });
+                        }
+                    } catch (e) {}
+                }
+            }
+            return servers;
+        }
+
+        // --- ШАГ 6: Загрузка на сервисы создания ссылок ---
+        async function uploadToPaste(text) {
+            // Сервис 1: Hastebin (поддерживает CORS)
+            try {
+                log("  Попытка через Hastebin...", "info");
+                const res = await fetch('https://hastebin.com/documents', { method: 'POST', body: text });
+                if (res.ok) {
+                    const json = await res.json();
+                    const url = 'https://hastebin.com/raw/' + json.key;
+                    log(`  ✅ Hastebin вернул ссылку!`, "success");
+                    return url;
+                }
+            } catch (e) { log(`  ❌ Hastebin: ${e.message}`, "error"); }
+
+            // Сервис 2: 0x0.st (простой файлообменник)
+            try {
+                log("  Попытка через 0x0.st...", "info");
+                const formData = new FormData();
+                formData.append('file', new Blob([text], {type: 'text/plain'}), 'vpn.txt');
+                const res = await fetch('https://0x0.st', { method: 'POST', body: formData });
+                if (res.ok) {
+                    const url = (await res.text()).trim();
+                    if (url.startsWith('http')) {
+                        log(`  ✅ 0x0.st вернул ссылку!`, "success");
+                        return url;
+                    }
+                }
+            } catch (e) { log(`  ❌ 0x0.st: ${e.message}`, "error"); }
+
+            // Сервис 3: dpaste (возвращает прямую ссылку)
+            try {
+                log("  Попытка через dpaste.com...", "info");
+                const res = await fetch('https://dpaste.com/api/v2/', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    body: new URLSearchParams({ content: text, format: 'url' })
+                });
+                if (res.ok) {
+                    const url = (await res.text()).trim();
+                    log(`  ✅ dpaste вернул ссылку!`, "success");
+                    return url;
+                }
+            } catch (e) { log(`  ❌ dpaste: ${e.message}`, "error"); }
+
+            throw new Error("Все сервисы создания ссылок заблокированы браузером (CORS).");
+        }
+
+        // --- ГЛАВНАЯ ФУНКЦИЯ ---
         async function generate() {
             const btn = document.getElementById('startBtn');
             const status = document.getElementById('status');
@@ -126,38 +194,26 @@
             log("=== СТАРТ ГЕНЕРАЦИИ ===", "warn");
 
             try {
-                // Шаг 1: Скачивание с fallback
+                // 1. Скачивание
                 log("Шаг 1: Поиск рабочего прокси для скачивания...", "info");
                 const text = await fetchWithFallback();
 
-                // Шаг 2: Парсинг
-                log("Шаг 2: Парсинг строк...", "info");
-                const lines = text.split('\n').filter(l => l.trim() !== '');
-                const servers = [];
-                for (const line of lines) {
-                    if (line.startsWith('vless://') || line.startsWith('trojan://')) {
-                        try {
-                            const match = line.match(/^(?:vless|trojan):\/\/[^@]+@([^:]+):(\d+).*#(.+)$/);
-                            if (match) {
-                                servers.push({ uri: line, name: decodeURIComponent(match[3]) });
-                            }
-                        } catch (e) {}
-                    }
-                }
+                // 2. Парсинг
+                log("Шаг 2: Парсинг строк и извлечение локаций...", "info");
+                const servers = parseServers(text);
                 if (servers.length === 0) throw new Error("Не найдено ни одного VLESS/Trojan сервера!");
                 log(`Найдено валидных серверов: ${servers.length}`, "success");
 
-                // Шаг 3: Группировка
+                // 3. Группировка
                 log("Шаг 3: Группировка по локациям...", "info");
                 const groups = {};
                 servers.forEach(srv => {
-                    const loc = srv.name.replace(/\s*\d+$/, '').trim();
-                    if (!groups[loc]) groups[loc] = [];
-                    groups[loc].push(srv);
+                    if (!groups[srv.location]) groups[srv.location] = [];
+                    groups[srv.location].push(srv);
                 });
                 log(`Уникальных локаций: ${Object.keys(groups).length}`, "success");
 
-                // Шаг 4: Отбор
+                // 4. Отбор
                 log("Шаг 4: Отбор по 2 сервера с каждой локации...", "info");
                 const finalUris = [];
                 for (const [loc, srvs] of Object.entries(groups)) {
@@ -165,22 +221,16 @@
                     bestTwo.forEach(s => finalUris.push(s.uri));
                     log(`📍 ${loc}: отобрано ${bestTwo.length} из ${srvs.length}`);
                 }
+                log(`Итого серверов в подписке: ${finalUris.length}`, "success");
 
-                // Шаг 5: Кодирование
+                // 5. Кодирование
                 log("Шаг 5: Кодирование в Base64...", "info");
                 const base64Sub = btoa(unescape(encodeURIComponent(finalUris.join('\n'))));
                 log(`Base64 сгенерирован (${base64Sub.length} символов)`, "success");
 
-                // Шаг 6: Загрузка на paste.rs
-                log("Шаг 6: Отправка на paste.rs...", "info");
-                const pasteRes = await fetch('https://paste.rs/', {
-                    method: 'POST',
-                    body: base64Sub,
-                    signal: AbortSignal.timeout(8000)
-                });
-                if (!pasteRes.ok) throw new Error(`paste.rs вернул ${pasteRes.status}`);
-                const pasteUrl = (await pasteRes.text()).trim();
-                if (!pasteUrl.startsWith('http')) throw new Error("paste.rs не вернул ссылку");
+                // 6. Загрузка
+                log("Шаг 6: Создание ссылки...", "info");
+                const pasteUrl = await uploadToPaste(base64Sub);
 
                 log("=== УСПЕШНО ЗАВЕРШЕНО ===", "success");
                 status.innerText = `✅ Ссылка готова! Серверов: ${finalUris.length}`;
