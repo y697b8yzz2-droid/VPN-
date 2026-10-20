@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VPN Fast Generator + Logs</title>
+    <style>
+        body { font-family: system-ui, sans-serif; background: #1a1a2e; color: #fff; padding: 20px; max-width: 800px; margin: 0 auto; }
+        h1 { color: #4cc9f0; }
+        .card { background: #2a2a40; padding: 20px; border-radius: 8px; margin-bottom: 20px; border: 1px solid #333; }
+        
+        .btn-group { display: flex; gap: 10px; }
+        .btn { padding: 12px 24px; background: #4cc9f0; color: #000; border: none; border-radius: 5px; font-weight: bold; cursor: pointer; font-size: 16px; flex: 1; transition: 0.2s; }
+        .btn:hover { background: #3b9bbd; }
+        .btn:disabled { background: #555; cursor: not-allowed; color: #aaa; }
+        .btn-secondary { background: #444; color: #fff; }
+        .btn-secondary:hover { background: #555; }
+        
+        .status { font-family: monospace; color: #fca311; margin-top: 15px; white-space: pre-wrap; font-size: 14px; }
+        .success { color: #4ade80; }
+        .error { color: #f87171; }
+        
+        .result-box { display: none; margin-top: 15px; }
+        input { width: 100%; padding: 15px; box-sizing: border-box; border-radius: 5px; border: 1px solid #444; background: #111; color: #4cc9f0; font-family: monospace; font-size: 14px; margin-top: 10px; }
+        
+        /* Стили для логов */
+        .log-container { display: none; margin-top: 15px; background: #000; border: 1px solid #333; border-radius: 5px; padding: 10px; height: 250px; overflow-y: auto; font-family: monospace; font-size: 12px; }
+        .log-entry { margin-bottom: 5px; line-height: 1.4; }
+        .log-time { color: #666; margin-right: 5px; }
+        .log-info { color: #4cc9f0; }
+        .log-success { color: #4ade80; }
+        .log-error { color: #f87171; }
+        .log-warn { color: #fca311; }
+    </style>
+</head>
+<body>
+    <h1>🚀 Генератор ссылки VPN</h1>
+    
+    <div class="card">
+        <p>Нажмите кнопку. Скрипт скачает конфиги, отберет по 2 сервера из каждой локации и создаст <b>ссылку</b> для вставки в клиент.</p>
+        
+        <div class="btn-group">
+            <button class="btn" id="startBtn" onclick="generate()">СГЕНЕРИРОВАТЬ ССЫЛКУ</button>
+            <button class="btn btn-secondary" onclick="toggleLogs()">📝 Показать логи</button>
+        </div>
+        
+        <div id="status" class="status">Ожидание...</div>
+        
+        <!-- Панель логов -->
+        <div class="log-container" id="logContainer">
+            <div id="logOutput"></div>
+        </div>
+    </div>
+
+    <div id="resultCard" class="card result-box">
+        <h2 class="success">✅ Ссылка готова!</h2>
+        <p>Скопируйте её и вставьте в Hiddify / v2rayNG / Streisand как "Добавить из ссылки":</p>
+        
+        <input type="text" id="subUrl" readonly onclick="this.select()">
+        
+        <button class="btn" style="margin-top: 10px;" onclick="copyUrl()">📋 Скопировать ссылку</button>
+    </div>
+
+    <script>
+        const SOURCE_URL = 'https://raw.githubusercontent.com/Remiuc0ff/vpn-hiddifycode/main/allhiddifyvpn';
+        let logVisible = false;
+
+        // --- ФУНКЦИЯ ЛОГИРОВАНИЯ ---
+        function log(message, type = 'info') {
+            const logOutput = document.getElementById('logOutput');
+            const time = new Date().toLocaleTimeString('ru-RU');
+            
+            const entry = document.createElement('div');
+            entry.className = `log-entry log-${type}`;
+            entry.innerHTML = `<span class="log-time">[${time}]</span> ${message}`;
+            
+            logOutput.appendChild(entry);
+            
+            // Автоскролл вниз
+            const container = document.getElementById('logContainer');
+            container.scrollTop = container.scrollHeight;
+
+            // Если панель скрыта, но произошла ошибка — показываем её
+            if (type === 'error' && !logVisible) toggleLogs();
+        }
+
+        // --- УПРАВЛЕНИЕ ПАНЕЛЬЮ ЛОГОВ ---
+        function toggleLogs() {
+            const container = document.getElementById('logContainer');
+            const btn = event ? event.target : document.querySelector('.btn-secondary');
+            
+            logVisible = !logVisible;
+            container.style.display = logVisible ? 'block' : 'none';
+            
+            if (btn) {
+                btn.innerText = logVisible ? '📝 Скрыть логи' : '📝 Показать логи';
+                btn.classList.toggle('btn-secondary');
+            }
+        }
+
+        // --- ОСНОВНАЯ ФУНКЦИЯ ---
+        async function generate() {
+            const btn = document.getElementById('startBtn');
+            const status = document.getElementById('status');
+            const resultCard = document.getElementById('resultCard');
+            
+            btn.disabled = true;
+            resultCard.style.display = 'none';
+            status.className = 'status';
+            status.innerText = "⏳ Работаем... Смотрите логи ниже.";
+            
+            // Очищаем старые логи
+            document.getElementById('logOutput').innerHTML = '';
+            log("=== СТАРТ ГЕНЕРАЦИИ ===", "warn");
+
+            try {
+                // Шаг 1: Скачивание
+                log(`Шаг 1: Запрос к прокси для скачивания файла...`);
+                const fetchUrl = 'https://api.allorigins.win/raw?url=' + encodeURIComponent(SOURCE_URL);
+                log(`URL прокси: ${fetchUrl.substring(0, 60)}...`);
+                
+                const res = await fetch(fetchUrl);
+                if (!res.ok) throw new Error(`HTTP ошибка: ${res.status}`);
+                
+                const text = await res.text();
+                log(`Файл успешно скачан. Размер: ${text.length} байт.`, "success");
+
+                // Шаг 2: Парсинг
+                log(`Шаг 2: Парсинг строк...`);
+                const lines = text.split('\n').filter(l => l.trim() !== '');
+                const servers = [];
+                
+                for (const line of lines) {
+                    if (line.startsWith('vless://') || line.startsWith('trojan://')) {
+                        try {
+                            const match = line.match(/^(?:vless|trojan):\/\/[^@]+@([^:]+):(\d+).*#(.+)$/);
+                            if (match) {
+                                servers.push({
+                                    uri: line,
+                                    name: decodeURIComponent(match[3])
+                                });
+                            }
+                        } catch (e) {
+                            log(`Ошибка парсинга строки: ${line.substring(0, 30)}...`, "error");
+                        }
+                    }
+                }
+                
+                if (servers.length === 0) throw new Error("Не найдено ни одного VLESS/Trojan сервера!");
+                log(`Найдено валидных серверов: ${servers.length}`, "success");
+
+                // Шаг 3: Группировка
+                log(`Шаг 3: Группировка по локациям...`);
+                const groups = {};
+                servers.forEach(srv => {
+                    const loc = srv.name.replace(/\s*\d+$/, '').trim();
+                    if (!groups[loc]) groups[loc] = [];
+                    groups[loc].push(srv);
+                });
+
+                const locationsCount = Object.keys(groups).length;
+                log(`Найдено уникальных локаций: ${locationsCount}`, "success");
+
+                // Шаг 4: Отбор
+                log(`Шаг 4: Отбор по 2 сервера с каждой локации...`);
+                const finalUris = [];
+                for (const [loc, srvs] of Object.entries(groups)) {
+                    const bestTwo = srvs.slice(0, 2);
+                    bestTwo.forEach(s => finalUris.push(s.uri));
+                    log(`📍 ${loc}: отобрано ${bestTwo.length} из ${srvs.length}`);
+                }
+                log(`Итого отобрано серверов: ${finalUris.length}`, "success");
+
+                // Шаг 5: Кодирование
+                log(`Шаг 5: Кодирование в Base64...`);
+                const subText = finalUris.join('\n');
+                const base64Sub = btoa(unescape(encodeURIComponent(subText)));
+                log(`Base64 строка сгенерирована. Длина: ${base64Sub.length} символов.`, "success");
+
+                // Шаг 6: Загрузка
+                log(`Шаг 6: Отправка на paste.rs для получения ссылки...`);
+                const pasteRes = await fetch('https://paste.rs/', {
+                    method: 'POST',
+                    body: base64Sub
+                });
+                
+                if (!pasteRes.ok) throw new Error(`Ошибка paste.rs: ${pasteRes.status}`);
+                
+                const pasteUrl = await pasteRes.text();
+                log(`Ответ от paste.rs: ${pasteUrl.trim()}`, "info");
+                
+                if (!pasteUrl.startsWith('http')) {
+                    log(`Ответ не похож на ссылку!`, "error");
+                    throw new Error("Сервер не вернул ссылку");
+                }
+
+                // Успех
+                log(`=== УСПЕШНО ЗАВЕРШЕНО ===`, "success");
+                status.innerText = `✅ Ссылка готова! Серверов: ${finalUris.length}`;
+                status.className = 'status success';
+                
+                document.getElementById('subUrl').value = pasteUrl.trim();
+                resultCard.style.display = 'block';
+
+            } catch (e) {
+                log(`КРИТИЧЕСКАЯ ОШИБКА: ${e.message}`, "error");
+                status.innerText = "❌ Ошибка: " + e.message;
+                status.className = 'status error';
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        function copyUrl() {
+            const input = document.getElementById('subUrl');
+            input.select();
+            input.setSelectionRange(0, 99999);
+            navigator.clipboard.writeText(input.value).then(() => {
+                alert("Ссылка скопирована!\n\nВставьте её в ваш VPN-клиент.");
+            });
+        }
+    </script>
+</body>
+</html>
