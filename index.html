@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>VPN Fast Generator + Fallback Logs</title>
+    <title>VPN Fast Generator + Clipboard</title>
     <style>
         body { font-family: system-ui, sans-serif; background: #1a1a2e; color: #fff; padding: 20px; max-width: 800px; margin: 0 auto; }
         h1 { color: #4cc9f0; }
@@ -16,7 +16,23 @@
         .success { color: #4ade80; }
         .error { color: #f87171; }
         .result-box { display: none; margin-top: 15px; }
-        input { width: 100%; padding: 15px; box-sizing: border-box; border-radius: 5px; border: 1px solid #444; background: #111; color: #4cc9f0; font-family: monospace; font-size: 14px; margin-top: 10px; }
+        
+        /* Стили для поля с сырыми ссылками */
+        textarea { 
+            width: 100%; 
+            height: 150px; 
+            padding: 10px; 
+            box-sizing: border-box; 
+            border-radius: 5px; 
+            border: 1px solid #444; 
+            background: #111; 
+            color: #4cc9f0; 
+            font-family: monospace; 
+            font-size: 12px; 
+            margin-top: 10px; 
+            resize: vertical;
+        }
+        
         .log-container { display: none; margin-top: 15px; background: #000; border: 1px solid #333; border-radius: 5px; padding: 10px; height: 250px; overflow-y: auto; font-family: monospace; font-size: 12px; }
         .log-entry { margin-bottom: 5px; line-height: 1.4; }
         .log-time { color: #666; margin-right: 5px; }
@@ -27,12 +43,12 @@
     </style>
 </head>
 <body>
-    <h1>🚀 Генератор ссылки VPN</h1>
+    <h1>🚀 Генератор ссылок VPN</h1>
     
     <div class="card">
-        <p>Скрипт переберет зеркала и прокси для скачивания, улучшенный парсер локаций и перебор сервисов для создания ссылки.</p>
+        <p>Скрипт скачает конфиги, отберет по 2 сервера с каждой локации и выдаст готовые ссылки для вставки.</p>
         <div class="btn-group">
-            <button class="btn" id="startBtn" onclick="generate()">СГЕНЕРИРОВАТЬ ССЫЛКУ</button>
+            <button class="btn" id="startBtn" onclick="generate()">СГЕНЕРИРОВАТЬ ССЫЛКИ</button>
             <button class="btn btn-secondary" onclick="toggleLogs()">📝 Показать логи</button>
         </div>
         <div id="status" class="status">Ожидание...</div>
@@ -43,21 +59,22 @@
     </div>
 
     <div id="resultCard" class="card result-box">
-        <h2 class="success">✅ Ссылка готова!</h2>
-        <p>Скопируйте её и вставьте в Hiddify / v2rayNG / Streisand как "Добавить из ссылки":</p>
-        <input type="text" id="subUrl" readonly onclick="this.select()">
-        <button class="btn" style="margin-top: 10px;" onclick="copyUrl()">📋 Скопировать ссылку</button>
+        <h2 class="success">✅ Ссылки готовы!</h2>
+        <p>Нажмите кнопку ниже, чтобы скопировать все ссылки, а затем в Hiddify выберите <b>«Добавить из буфера обмена»</b>.</p>
+        
+        <textarea id="linksOutput" readonly></textarea>
+        
+        <button class="btn" style="margin-top: 10px;" onclick="copyLinks()">📋 Скопировать все ссылки</button>
     </div>
 
     <script>
         const RAW_GITHUB_URL = 'https://raw.githubusercontent.com/Remiuc0ff/vpn-hiddifycode/main/allhiddifyvpn';
         
-        // 1. Зеркала и прокси для скачивания файла
+        // Прокси для скачивания (jsDelivr работает быстрее всех)
         const DOWNLOAD_PROXIES = [
             { name: 'jsDelivr CDN', build: () => `https://cdn.jsdelivr.net/gh/Remiuc0ff/vpn-hiddifycode@main/allhiddifyvpn` },
             { name: 'Statically CDN', build: () => `https://cdn.statically.io/gh/Remiuc0ff/vpn-hiddifycode/main/allhiddifyvpn` },
-            { name: 'corsproxy.io', build: (url) => `https://corsproxy.io/?${encodeURIComponent(url)}` },
-            { name: 'allorigins.win', build: (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}` }
+            { name: 'corsproxy.io', build: (url) => `https://corsproxy.io/?${encodeURIComponent(url)}` }
         ];
 
         let logVisible = false;
@@ -82,7 +99,6 @@
             if (btn) btn.innerText = logVisible ? '📝 Скрыть логи' : '📝 Показать логи';
         }
 
-        // --- ШАГ 1: Скачивание ---
         async function fetchWithFallback() {
             for (const proxy of DOWNLOAD_PROXIES) {
                 try {
@@ -101,14 +117,12 @@
             throw new Error('Все прокси и зеркала не сработали.');
         }
 
-        // --- УЛУЧШЕННЫЙ ПАРСЕР ЛОКАЦИЙ ---
         function parseServers(text) {
             const lines = text.split('\n').filter(l => l.trim() !== '');
             const servers = [];
             for (const line of lines) {
                 if (line.startsWith('vless://') || line.startsWith('trojan://')) {
                     try {
-                        // Отделяем хэш (название) от самой ссылки
                         let uri = line;
                         let name = '';
                         const hashIndex = line.indexOf('#');
@@ -117,14 +131,11 @@
                             uri = line.substring(0, hashIndex);
                         }
 
-                        // Ищем хост и порт
                         const match = uri.match(/@([^:]+):(\d+)/);
                         if (match) {
                             const host = match[1];
-                            // Если названия нет или оно пустое, используем IP-адрес как локацию
                             let locName = name.replace(/\s*\d+$/, '').trim();
                             if (!locName) locName = host; 
-
                             servers.push({ uri: line, host, location: locName });
                         }
                     } catch (e) {}
@@ -133,54 +144,6 @@
             return servers;
         }
 
-        // --- ШАГ 6: Загрузка на сервисы создания ссылок ---
-        async function uploadToPaste(text) {
-            // Сервис 1: Hastebin (поддерживает CORS)
-            try {
-                log("  Попытка через Hastebin...", "info");
-                const res = await fetch('https://hastebin.com/documents', { method: 'POST', body: text });
-                if (res.ok) {
-                    const json = await res.json();
-                    const url = 'https://hastebin.com/raw/' + json.key;
-                    log(`  ✅ Hastebin вернул ссылку!`, "success");
-                    return url;
-                }
-            } catch (e) { log(`  ❌ Hastebin: ${e.message}`, "error"); }
-
-            // Сервис 2: 0x0.st (простой файлообменник)
-            try {
-                log("  Попытка через 0x0.st...", "info");
-                const formData = new FormData();
-                formData.append('file', new Blob([text], {type: 'text/plain'}), 'vpn.txt');
-                const res = await fetch('https://0x0.st', { method: 'POST', body: formData });
-                if (res.ok) {
-                    const url = (await res.text()).trim();
-                    if (url.startsWith('http')) {
-                        log(`  ✅ 0x0.st вернул ссылку!`, "success");
-                        return url;
-                    }
-                }
-            } catch (e) { log(`  ❌ 0x0.st: ${e.message}`, "error"); }
-
-            // Сервис 3: dpaste (возвращает прямую ссылку)
-            try {
-                log("  Попытка через dpaste.com...", "info");
-                const res = await fetch('https://dpaste.com/api/v2/', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                    body: new URLSearchParams({ content: text, format: 'url' })
-                });
-                if (res.ok) {
-                    const url = (await res.text()).trim();
-                    log(`  ✅ dpaste вернул ссылку!`, "success");
-                    return url;
-                }
-            } catch (e) { log(`  ❌ dpaste: ${e.message}`, "error"); }
-
-            throw new Error("Все сервисы создания ссылок заблокированы браузером (CORS).");
-        }
-
-        // --- ГЛАВНАЯ ФУНКЦИЯ ---
         async function generate() {
             const btn = document.getElementById('startBtn');
             const status = document.getElementById('status');
@@ -194,17 +157,14 @@
             log("=== СТАРТ ГЕНЕРАЦИИ ===", "warn");
 
             try {
-                // 1. Скачивание
-                log("Шаг 1: Поиск рабочего прокси для скачивания...", "info");
+                log("Шаг 1: Скачивание конфигов...", "info");
                 const text = await fetchWithFallback();
 
-                // 2. Парсинг
-                log("Шаг 2: Парсинг строк и извлечение локаций...", "info");
+                log("Шаг 2: Парсинг строк...", "info");
                 const servers = parseServers(text);
                 if (servers.length === 0) throw new Error("Не найдено ни одного VLESS/Trojan сервера!");
                 log(`Найдено валидных серверов: ${servers.length}`, "success");
 
-                // 3. Группировка
                 log("Шаг 3: Группировка по локациям...", "info");
                 const groups = {};
                 servers.forEach(srv => {
@@ -213,7 +173,6 @@
                 });
                 log(`Уникальных локаций: ${Object.keys(groups).length}`, "success");
 
-                // 4. Отбор
                 log("Шаг 4: Отбор по 2 сервера с каждой локации...", "info");
                 const finalUris = [];
                 for (const [loc, srvs] of Object.entries(groups)) {
@@ -221,21 +180,15 @@
                     bestTwo.forEach(s => finalUris.push(s.uri));
                     log(`📍 ${loc}: отобрано ${bestTwo.length} из ${srvs.length}`);
                 }
-                log(`Итого серверов в подписке: ${finalUris.length}`, "success");
+                log(`Итого серверов: ${finalUris.length}`, "success");
 
-                // 5. Кодирование
-                log("Шаг 5: Кодирование в Base64...", "info");
-                const base64Sub = btoa(unescape(encodeURIComponent(finalUris.join('\n'))));
-                log(`Base64 сгенерирован (${base64Sub.length} символов)`, "success");
-
-                // 6. Загрузка
-                log("Шаг 6: Создание ссылки...", "info");
-                const pasteUrl = await uploadToPaste(base64Sub);
+                // Выводим сырые ссылки в текстовое поле
+                const linksText = finalUris.join('\n');
+                document.getElementById('linksOutput').value = linksText;
 
                 log("=== УСПЕШНО ЗАВЕРШЕНО ===", "success");
-                status.innerText = `✅ Ссылка готова! Серверов: ${finalUris.length}`;
+                status.innerText = `✅ Готово! Ссылок: ${finalUris.length}. Скопируйте их.`;
                 status.className = 'status success';
-                document.getElementById('subUrl').value = pasteUrl;
                 resultCard.style.display = 'block';
 
             } catch (e) {
@@ -247,10 +200,13 @@
             }
         }
 
-        function copyUrl() {
-            const input = document.getElementById('subUrl');
-            input.select();
-            navigator.clipboard.writeText(input.value).then(() => alert("Ссылка скопирована!"));
+        function copyLinks() {
+            const textarea = document.getElementById('linksOutput');
+            textarea.select();
+            textarea.setSelectionRange(0, 99999);
+            navigator.clipboard.writeText(textarea.value).then(() => {
+                alert("Все ссылки скопированы!\n\nТеперь в Hiddify нажмите «+» и выберите «Добавить из буфера обмена».");
+            });
         }
     </script>
 </body>
